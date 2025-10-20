@@ -1,3 +1,4 @@
+from collections import deque
 import sys
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -29,7 +30,7 @@ def randomly_parse_and_print_urls(url, driver):
     print(link)
     randomly_parse_and_print_urls(link, driver)
 
-def iteratively_parse_and_print_urls(url, driver):
+def iteratively_parse_and_print_urls_dfs(url, driver):
     MAX_DEPTH = 5
 
     stack = [(url, 0)]
@@ -45,7 +46,41 @@ def iteratively_parse_and_print_urls(url, driver):
             if depth < MAX_DEPTH:
                 stack.append((absolute_link, depth + 1))
 
+def iteratively_parse_and_print_urls_bfs(root_url, driver):
+    MAX_ARMS = 5
+    cache = deque()
+    q = deque()
+    url = root_url
+    q.append((url, 0))
+    while q:
+        url, depth = q.popleft()
+        compare = len(url)//2
 
+        driver.get(url)
+        page_source = driver.page_source
+        soup = BeautifulSoup(page_source, 'html.parser')
+        links = soup.find_all('a', href=True)
+
+        for link in links:
+            absolute_link = urljoin(url, link['href'])
+
+            def comp(s):
+                s = s.split('/')
+                return s[min(2, len(s) - 1)]
+
+            if any(comp(other_link) == comp(absolute_link) for other_link in cache):
+                continue
+
+            cache.append(absolute_link)
+
+            print(absolute_link)
+            if depth < MAX_ARMS:
+                q.append((absolute_link, depth + 1))
+            else:
+                break
+
+        if len(cache) > 10:
+            cache.popleft()
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -62,7 +97,8 @@ if __name__ == "__main__":
         # for url in get_urls_from_page(starting_url, driver):
         #     print(url)
         # recursively_parse_and_print_urls(starting_url, driver)
-        iteratively_parse_and_print_urls(starting_url, driver)
+        print(starting_url)
+        iteratively_parse_and_print_urls_bfs(starting_url, driver)
 
     finally:
         driver.quit()
