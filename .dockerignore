@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Data and output files
+*.jsonl
+*.db
+data/
+crawl.jsonl
+
+# Tests
+tests/
+pytest.ini
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+README.md
+
+# Scripts
+run.sh
+

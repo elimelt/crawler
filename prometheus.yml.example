@@ -1,0 +1,20 @@
+# Example Prometheus configuration for scraping crawler metrics
+# Copy this to your Prometheus configuration directory and adjust as needed
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Crawler service metrics
+  - job_name: 'crawler'
+    static_configs:
+      - targets: ['crawler:8000']  # Use 'localhost:8000' if running outside Docker
+        labels:
+          service: 'web-crawler'
+          environment: 'production'
+    
+    # Scrape metrics every 10 seconds for more granular data
+    scrape_interval: 10s
+    scrape_timeout: 5s
+

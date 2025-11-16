@@ -27,7 +27,7 @@ class Crawler:
         self.visited_lock = threading.Lock()
         self.pages_crawled = 0
         self.pages_lock = threading.Lock()
-        self.writer = JsonlWriter(config.output_path)
+        self.writer = JsonlWriter(config.output_path, append=config.resume)
         self.allowed_domains = [d.lower().lstrip(".") for d in config.allowed_domains]
         self.store: Optional[SqliteStore] = SqliteStore(config.sqlite_path) if config.sqlite_path else None
         self.metrics = Metrics()

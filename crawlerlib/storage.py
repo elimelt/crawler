@@ -6,20 +6,20 @@ from pathlib import Path
 
 
 class JsonlWriter:
-    def __init__(self, output_path: str):
+    def __init__(self, output_path: str, append: bool = False) -> None:
         self.output_path = output_path
         self._lock = threading.Lock()
         out_path = Path(self.output_path)
         if out_path.parent:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as _:
-            pass
+        if not append:
+            with out_path.open("w", encoding="utf-8") as _:
+                pass
 
     def write(self, record: Dict) -> None:
         line = json.dumps(record, ensure_ascii=False)
-        with self._lock:
-            with Path(self.output_path).open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        with self._lock, Path(self.output_path).open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 
 class SqliteStore:

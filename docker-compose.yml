@@ -1,0 +1,30 @@
+services:
+  crawler:
+    build: .
+    image: crawler:latest
+    container_name: crawler
+    ports:
+      - "8000:8000"  # Prometheus metrics endpoint
+    volumes:
+      - ./data:/app/data  # Persist crawl data
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      python extract_with_metrics.py
+      --start https://example.com
+      --max-pages 100
+      --max-depth 2
+      --concurrency 8
+      --delay 0.5
+      --out /app/data/crawl.jsonl
+      --sqlite /app/data/crawl.db
+      --prometheus-port 8000
+      -v
+    restart: "no"
+    networks:
+      - crawler-network
+
+networks:
+  crawler-network:
+    driver: bridge
+
