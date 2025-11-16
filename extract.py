@@ -1,104 +1,76 @@
-from collections import deque
-import sys
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
-import random
+import argparse
+import logging
+from urllib.parse import urlparse
 
-def get_urls_from_page(url, driver):
-    driver.get(url)
-    page_source = driver.page_source
-    soup = BeautifulSoup(page_source, 'html.parser')
-    links = soup.find_all('a', href=True)
-    return [urljoin(url, link['href']) for link in links]
+from crawlerlib.config import CrawlConfig, DEFAULT_USER_AGENT
+from crawlerlib.engine import Crawler
 
-def recursively_parse_and_print_urls(url, driver):
-    urls = get_urls_from_page(url, driver)
-    print(f"URLs found on {url}:")
-    for url in urls:
-        print(url)
-        recursively_parse_and_print_urls(url, driver)
 
-def randomly_parse_and_print_urls(url, driver):
-    driver.get(url)
-    page_source = driver.page_source
-    soup = BeautifulSoup(page_source, 'html.parser')
-    links = soup.find_all('a', href=True)
-    rand_link = random.choice(links)
-    link = urljoin(url, rand_link['href'])
-    print(link)
-    randomly_parse_and_print_urls(link, driver)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Domain-aware, robots-friendly web crawler (JSONL output).")
+    parser.add_argument("--start", nargs="+", required=True, help="One or more starting URLs.")
+    parser.add_argument(
+        "--allowed-domain",
+        dest="allowed_domains",
+        nargs="+",
+        default=None,
+        help="Domains to allow (e.g., example.com). Defaults to domains of --start.",
+    )
+    parser.add_argument("--max-pages", type=int, default=200, help="Maximum number of pages to crawl.")
+    parser.add_argument("--max-depth", type=int, default=2, help="Maximum crawl depth from any start URL.")
+    parser.add_argument("--concurrency", type=int, default=8, help="Number of concurrent workers.")
+    parser.add_argument("--delay", type=float, default=0.5, help="Per-host politeness delay in seconds.")
+    parser.add_argument("--timeout", type=float, default=15.0, help="HTTP read timeout in seconds.")
+    parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help="User-Agent header to send.")
+    parser.add_argument("--out", dest="output_path", default="crawl.jsonl", help="Path to JSONL output file.")
+    parser.add_argument("--ignore-robots", action="store_true", help="Ignore robots.txt (not recommended).")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase logging verbosity.")
+    parser.add_argument("--sqlite", dest="sqlite_path", default=None, help="Path to SQLite DB for persistence.")
+    parser.add_argument("--resume", action="store_true", help="Resume from SQLite frontier (requires --sqlite).")
+    parser.add_argument("--metrics-interval", type=float, default=10.0, help="Seconds between perf logs (0 to disable).")
+    parser.add_argument("--max-connections", type=int, default=16, help="Max connections per pool for HTTP client.")
+    return parser.parse_args()
 
-def iteratively_parse_and_print_urls_dfs(url, driver):
-    MAX_DEPTH = 5
 
-    stack = [(url, 0)]
-    while stack:
-        url, depth = stack.pop()
-        driver.get(url)
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
-        links = soup.find_all('a', href=True)
-        for link in links:
-            absolute_link = urljoin(url, link['href'])
-            print(absolute_link)
-            if depth < MAX_DEPTH:
-                stack.append((absolute_link, depth + 1))
+def main() -> None:
+    args = parse_args()
+    log_level = logging.WARNING
+    if args.verbose == 1:
+        log_level = logging.INFO
+    elif args.verbose >= 2:
+        log_level = logging.DEBUG
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
+    )
+    if args.allowed_domains is None:
+        inferred_domains = []
+        for u in args.start:
+            host = urlparse(u if "://" in u else "https://" + u).netloc
+            if host:
+                inferred_domains.append(host)
+        allowed_domains = list({d.lower() for d in inferred_domains})
+    else:
+        allowed_domains = [d.lower() for d in args.allowed_domains]
+    config = CrawlConfig(
+        start_urls=args.start,
+        allowed_domains=allowed_domains,
+        max_pages=max(1, args.max_pages),
+        max_depth=max(0, args.max_depth),
+        concurrency=max(1, args.concurrency),
+        max_connections=max(1, args.max_connections),
+        delay_seconds=max(0.0, args.delay),
+        request_timeout=max(1.0, args.timeout),
+        user_agent=args.user_agent,
+        obey_robots_txt=not args.ignore_robots,
+        output_path=args.output_path,
+        sqlite_path=args.sqlite_path,
+        resume=bool(args.sqlite_path and args.resume),
+        metrics_interval=max(0.0, args.metrics_interval),
+    )
+    crawler = Crawler(config)
+    crawler.run()
 
-def iteratively_parse_and_print_urls_bfs(root_url, driver):
-    MAX_ARMS = 5
-    cache = deque()
-    q = deque()
-    url = root_url
-    q.append((url, 0))
-    while q:
-        url, depth = q.popleft()
-        compare = len(url)//2
-
-        driver.get(url)
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
-        links = soup.find_all('a', href=True)
-
-        for link in links:
-            absolute_link = urljoin(url, link['href'])
-
-            def comp(s):
-                s = s.split('/')
-                return s[min(2, len(s) - 1)]
-
-            if any(comp(other_link) == comp(absolute_link) for other_link in cache):
-                continue
-
-            cache.append(absolute_link)
-
-            print(absolute_link)
-            if depth < MAX_ARMS:
-                q.append((absolute_link, depth + 1))
-            else:
-                break
-
-        if len(cache) > 10:
-            cache.popleft()
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python script.py <url>")
-        sys.exit(1)
-
-    starting_url = sys.argv[1]
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run Chrome in headless mode (no GUI)
-    driver = webdriver.Chrome(options=chrome_options)
-
-    try:
-        # for url in get_urls_from_page(starting_url, driver):
-        #     print(url)
-        # recursively_parse_and_print_urls(starting_url, driver)
-        print(starting_url)
-        iteratively_parse_and_print_urls_bfs(starting_url, driver)
-
-    finally:
-        driver.quit()
+    main()

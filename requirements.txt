@@ -1,0 +1,6 @@
+beautifulsoup4==4.12.3
+urllib3==2.2.1
+certifi==2024.2.2
+# For tests
+pytest>=8.0.0
+
