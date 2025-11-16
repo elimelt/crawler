@@ -12,14 +12,31 @@ class JsonlWriter:
         out_path = Path(self.output_path)
         if out_path.parent:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-        if not append:
-            with out_path.open("w", encoding="utf-8") as _:
-                pass
+        mode = "a" if append else "w"
+        # Keep a single file handle to reduce per-write open/close overhead
+        self._fh = out_path.open(mode, encoding="utf-8")
 
     def write(self, record: Dict) -> None:
         line = json.dumps(record, ensure_ascii=False)
-        with self._lock, Path(self.output_path).open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with self._lock:
+            self._fh.write(line + "\n")
+            # ensure visibility for readers and durability across crashes
+            self._fh.flush()
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                if not self._fh.closed:
+                    self._fh.flush()
+                    self._fh.close()
+            except Exception:
+                pass
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class SqliteStore:
@@ -30,6 +47,58 @@ class SqliteStore:
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._ensure_schema()
+
+    def all_known_urls(self) -> List[str]:
+        """Return the union of URLs already stored (pages) and currently enqueued (frontier)."""
+        with self._lock, self._conn:
+            cur = self._conn.execute("SELECT url FROM pages")
+            pages = [row[0] for row in cur.fetchall()]
+            cur = self._conn.execute("SELECT url FROM frontier")
+            frontier = [row[0] for row in cur.fetchall()]
+            return pages + frontier
+
+    def iter_all_known_urls(self, batch_size: int = 10000):
+        """Yield URLs from pages and frontier using a cursor, to limit memory usage."""
+        with self._lock, self._conn:
+            cur = self._conn.cursor()
+            cur.execute("SELECT url FROM pages")
+            while True:
+                rows = cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield row[0]
+            cur.close()
+            cur = self._conn.cursor()
+            cur.execute("SELECT url FROM frontier")
+            while True:
+                rows = cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                for row in rows:
+                    yield row[0]
+            cur.close()
+
+    def iter_pages_urls(self, batch_size: int = 10000):
+        """Yield URLs that have been saved in pages table, batched."""
+        with self._lock, self._conn:
+            cur = self._conn.cursor()
+            cur.execute("SELECT url FROM pages")
+            try:
+                while True:
+                    rows = cur.fetchmany(batch_size)
+                    if not rows:
+                        break
+                    for row in rows:
+                        yield row[0]
+            finally:
+                cur.close()
+
+    def has_page(self, url: str) -> bool:
+        """Return True if url exists in pages table (visited), ignoring frontier."""
+        with self._lock, self._conn:
+            cur = self._conn.execute("SELECT 1 FROM pages WHERE url = ? LIMIT 1", (url,))
+            return cur.fetchone() is not None
 
     def _ensure_schema(self) -> None:
         with self._conn:

@@ -43,7 +43,11 @@ class UrlTools:
 class Extractor:
     @staticmethod
     def extract(url: str, html: str) -> Tuple[Dict, List[str]]:
-        soup = BeautifulSoup(html, "html.parser")
+        # Prefer lxml if available for speed; fall back to built-in parser
+        try:
+            soup = BeautifulSoup(html, "lxml")
+        except Exception:
+            soup = BeautifulSoup(html, "html.parser")
         title_el = soup.find("title")
         title = title_el.get_text(strip=True) if title_el else ""
         desc_el = soup.find("meta", attrs={"name": "description"})

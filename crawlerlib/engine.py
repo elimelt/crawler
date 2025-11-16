@@ -4,6 +4,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
+from pathlib import Path
 
 from .config import CrawlConfig
 from .net import HttpClient, RobotsCache
@@ -27,14 +28,33 @@ class Crawler:
         self.visited_lock = threading.Lock()
         self.pages_crawled = 0
         self.pages_lock = threading.Lock()
-        self.writer = JsonlWriter(config.output_path, append=config.resume)
+        resume_from_output = Path(config.output_path).exists()
+        self.writer = JsonlWriter(config.output_path, append=(config.resume or resume_from_output))
         self.allowed_domains = [d.lower().lstrip(".") for d in config.allowed_domains]
         self.store: Optional[SqliteStore] = SqliteStore(config.sqlite_path) if config.sqlite_path else None
         self.metrics = Metrics()
         self.stats_thread: Optional[StatsLogger] = None
+        self._bloom = None
 
         starts = UrlTools.normalize_start(config.start_urls)
-        if self.store and self.config.resume:
+        should_resume = self.store is not None and (self.config.resume or resume_from_output)
+        if self.store and should_resume:
+            # Pre-populate bloom (if available) from SQLite to ensure exact resume semantics.
+            try:
+                from .bloom_filter import create_bloom_filter
+                self._bloom = create_bloom_filter(expected_urls=max(self.config.max_pages, 1))
+                # Stream only visited pages from SQLite to avoid false positives on frontier
+                chunk: List[str] = []
+                chunk_size = 10_000
+                for url in self.store.iter_pages_urls(batch_size=chunk_size):
+                    chunk.append(url)
+                    if len(chunk) >= chunk_size:
+                        self._bloom.add_batch(chunk)
+                        chunk.clear()
+                if chunk:
+                    self._bloom.add_batch(chunk)
+            except Exception:
+                self._bloom = None
             restored = self.store.load_frontier()
             if restored:
                 for url, depth in restored:
@@ -64,11 +84,37 @@ class Crawler:
     def _should_visit(self, url: str) -> bool:
         if not UrlTools.is_allowed_domain(url, self.allowed_domains):
             return False
-        with self.visited_lock:
-            if url in self.visited:
+        # If using SQLite, prefer Bloom filter with SQLite fallback; otherwise use in-memory set.
+        if self.store:
+            # Lazy-init Bloom filter sized to expected crawl; fall back to defaults if needed.
+            if not hasattr(self, "_bloom") or self._bloom is None:
+                try:
+                    from .bloom_filter import create_bloom_filter
+                    expected = max(self.config.max_pages, 1)
+                    self._bloom = create_bloom_filter(expected_urls=expected)
+                except Exception:
+                    # Very defensive: if anything goes wrong, disable Bloom usage for this run.
+                    self._bloom = None
+            # Fast path via Bloom filter; guard with lock for thread-safety.
+            if self._bloom is not None:
+                with self.visited_lock:
+                    if not self._bloom.contains(url):
+                        self._bloom.add(url)
+                        return True
+            # Possible Bloom positive; confirm against SQLite pages to avoid skipping uncrawled URLs.
+            if self.store.has_page(url):
                 return False
-            self.visited.add(url)
-        return True
+            # Not present in SQLite; accept and ensure Bloom records it for subsequent checks.
+            if self._bloom is not None:
+                with self.visited_lock:
+                    self._bloom.add(url)
+            return True
+        else:
+            with self.visited_lock:
+                if url in self.visited:
+                    return False
+                self.visited.add(url)
+            return True
 
     def _enqueue_links(self, links: Iterable[str], current_depth: int) -> None:
         next_depth = current_depth + 1
